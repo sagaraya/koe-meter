@@ -1,1 +1,289 @@
-PLACEHOLDER
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>こえメーター</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0F131A;
+    --panel:#151B24;
+    --panel-edge:#212A36;
+    --seg-off:#1E2632;
+    --seg-off-edge:#28323F;
+    --text:#E7ECF2;
+    --muted:#68727F;
+    --muted-bright:#9AA6B4;
+    --green:#34D399;
+    --amber:#FBBF24;
+    --red:#FB5E5B;
+    box-sizing:border-box;
+    padding-top:env(safe-area-inset-top,0px);
+    padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    background:
+      radial-gradient(120% 90% at 50% -10%, #1A2230 0%, var(--bg) 55%) fixed,
+      var(--bg);
+    color:var(--text);
+    font-family:"Zen Kaku Gothic New",-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN",sans-serif;
+    display:flex;
+    justify-content:center;
+    -webkit-font-smoothing:antialiased;
+  }
+  .app{
+    width:100%;
+    max-width:440px;
+    min-height:100%;
+    padding:clamp(20px,5vw,32px) clamp(20px,6vw,34px) clamp(24px,5vw,34px);
+    display:flex;
+    flex-direction:column;
+  }
+
+  /* header */
+  .head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;}
+  .title{font-weight:700;font-size:1.02rem;letter-spacing:.06em;color:var(--text);}
+  .title small{color:var(--muted);font-weight:500;font-size:.72rem;letter-spacing:.14em;margin-left:.35em;}
+
+  /* readout */
+  .readout{
+    margin-top:clamp(16px,4vw,26px);
+    display:flex;align-items:flex-end;gap:.5rem;justify-content:center;
+    line-height:.8;
+  }
+  .num{
+    font-family:"Space Grotesk",monospace;
+    font-weight:700;
+    font-size:clamp(76px,26vw,116px);
+    font-variant-numeric:tabular-nums;
+    letter-spacing:-.02em;
+    color:var(--text);
+    transition:color .12s ease;
+  }
+  .num.silent{color:#3A4552;}
+  .of{
+    font-family:"Space Grotesk",monospace;
+    font-weight:500;
+    font-size:clamp(20px,6vw,26px);
+    color:var(--muted);
+    padding-bottom:.55rem;
+  }
+  .caption{
+    text-align:center;color:var(--muted);font-size:.78rem;letter-spacing:.05em;
+    margin-top:.5rem;
+  }
+
+  /* meter */
+  .meter{
+    flex:1;
+    display:flex;flex-direction:column-reverse;
+    gap:clamp(5px,1.4vw,8px);
+    margin:clamp(18px,5vw,28px) 0 clamp(20px,5vw,28px);
+    justify-content:center;
+  }
+  .row{display:flex;align-items:center;gap:12px;}
+  .rlabel{
+    width:1.4rem;flex:none;text-align:right;
+    font-family:"Space Grotesk",monospace;font-weight:500;
+    font-size:.82rem;font-variant-numeric:tabular-nums;
+    color:#39434F;transition:color .1s ease;
+  }
+  .row.on .rlabel{color:var(--muted-bright);}
+  .seg{
+    flex:1;
+    height:clamp(20px,4.2vh,30px);
+    border-radius:6px;
+    background:var(--seg-off);
+    border:1px solid var(--seg-off-edge);
+    position:relative;
+    transition:background .09s ease, box-shadow .09s ease, border-color .09s ease;
+  }
+  .seg::after{
+    content:"";position:absolute;inset:0;border-radius:5px;
+    background:linear-gradient(180deg,rgba(255,255,255,.14),rgba(255,255,255,0) 55%);
+    opacity:0;transition:opacity .09s ease;
+  }
+  .row.on .seg{
+    background:var(--c);
+    border-color:var(--c);
+    box-shadow:0 0 14px -2px var(--c), inset 0 0 0 1px rgba(255,255,255,.12);
+  }
+  .row.on .seg::after{opacity:1;}
+  /* peak-hold marker */
+  .row.peak .seg{
+    box-shadow:0 0 18px 0 var(--c), inset 0 0 0 1px rgba(255,255,255,.55);
+    border-color:#fff;
+  }
+
+  /* control */
+  .btn{
+    appearance:none;border:0;cursor:pointer;width:100%;
+    padding:15px 18px;border-radius:13px;
+    font-family:inherit;font-weight:700;font-size:1rem;letter-spacing:.04em;
+    color:#0C1016;background:var(--green);
+    transition:transform .06s ease, background .15s ease, opacity .15s ease;
+  }
+  .btn:active{transform:translateY(1px);}
+  .btn.live{background:var(--panel);color:var(--text);box-shadow:inset 0 0 0 1px var(--panel-edge);}
+  .btn:focus-visible{outline:2px solid var(--green);outline-offset:3px;}
+  .status{text-align:center;color:var(--muted);font-size:.8rem;margin-top:12px;min-height:1.2em;}
+  .status.err{color:var(--red);}
+
+  @media (prefers-reduced-motion:reduce){
+    .seg,.seg::after,.rlabel,.num,.btn{transition:none;}
+  }
+</style>
+</head>
+<body>
+  <div class="app">
+    <div class="head">
+      <div class="title">こえメーター<small>10段階</small></div>
+    </div>
+
+    <div class="readout">
+      <div class="num silent" id="num">0</div>
+      <div class="of">/10</div>
+    </div>
+    <div class="caption" id="caption">いまの声の大きさ</div>
+
+    <div class="meter" id="meter" aria-hidden="true"></div>
+
+    <button class="btn" id="btn">マイクをオンにする</button>
+    <div class="status" id="status">ボタンを押して、声を出してみてください</div>
+  </div>
+
+<script>
+(function(){
+  const meter = document.getElementById('meter');
+  const numEl = document.getElementById('num');
+  const capEl = document.getElementById('caption');
+  const btn = document.getElementById('btn');
+  const statusEl = document.getElementById('status');
+
+  // build 10 segments (level 1..10)
+  const rows = [];
+  for(let i=1;i<=10;i++){
+    const row = document.createElement('div');
+    row.className = 'row';
+    const c = i<=6 ? 'var(--green)' : (i<=8 ? 'var(--amber)' : 'var(--red)');
+    row.style.setProperty('--c', c);
+    row.innerHTML = '<div class="rlabel">'+i+'</div><div class="seg"></div>';
+    meter.appendChild(row);
+    rows[i] = row;
+  }
+
+  // --- audio state ---
+  let audioCtx, analyser, source, stream, rafId, buf;
+  let smooth = 0, peak = 0, running = false;
+
+  const FLOOR_DB = -62;   // ほぼ無音の目安
+  const CEIL_DB  = -12;   // 振り切りの目安
+
+  function levelFromRMS(rms){
+    if(rms <= 1e-7) return 0;
+    const db = 20 * Math.log10(rms);
+    let t = (db - FLOOR_DB) / (CEIL_DB - FLOOR_DB);
+    return Math.max(0, Math.min(1, t)) * 10;
+  }
+
+  function render(){
+    const lit = Math.round(smooth);
+    const pk = Math.round(peak);
+    for(let i=1;i<=10;i++){
+      const r = rows[i];
+      r.classList.toggle('on', i <= lit);
+      r.classList.toggle('peak', i === pk && pk > lit && pk > 0);
+    }
+    numEl.textContent = lit;
+    numEl.classList.toggle('silent', lit === 0);
+  }
+
+  function loop(){
+    analyser.getByteTimeDomainData(buf);
+    let sum = 0;
+    for(let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum += v*v; }
+    const rms = Math.sqrt(sum/buf.length);
+    const target = levelFromRMS(rms);
+    // 素早く上がって、ゆっくり下がる
+    const a = target > smooth ? 0.55 : 0.14;
+    smooth += (target - smooth) * a;
+    if(smooth > peak) peak = smooth; else peak = Math.max(smooth, peak - 0.05);
+    render();
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function fail(msg){
+    statusEl.className = 'status err';
+    statusEl.textContent = msg;
+  }
+
+  async function start(){
+    statusEl.className = 'status';
+    statusEl.textContent = 'マイクを準備しています…';
+
+    // この環境でそもそもマイクを使えるか
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      fail('この画面ではマイクを使えません。右上メニューから外部ブラウザで開いてください。');
+      return;
+    }
+
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false }
+      });
+    }catch(e){
+      const n = e && e.name;
+      if(n === 'NotAllowedError' || n === 'SecurityError'){
+        fail('マイクがブロックされています。ブラウザで開き直し、表示される許可ダイアログで「許可」を選んでください。');
+      }else if(n === 'NotFoundError' || n === 'OverconstrainedError'){
+        fail('マイクが見つかりませんでした。デバイスにマイクがあるか確認してください。');
+      }else if(n === 'NotReadableError'){
+        fail('マイクが他のアプリで使用中です。使っているアプリを閉じてから、もう一度お試しください。');
+      }else{
+        fail('マイクを使えませんでした（'+(n||'不明なエラー')+'）。ブラウザで開き直してお試しください。');
+      }
+      return;
+    }
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    await audioCtx.resume(); // iOS Safari 対策
+    source = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0;
+    buf = new Uint8Array(analyser.fftSize);
+    source.connect(analyser);
+
+    running = true;
+    btn.textContent = 'ストップ';
+    btn.classList.add('live');
+    capEl.textContent = '声を出すとメーターが動きます';
+    statusEl.textContent = '';
+    loop();
+  }
+
+  function stop(){
+    running = false;
+    if(rafId) cancelAnimationFrame(rafId);
+    if(stream) stream.getTracks().forEach(t=>t.stop());
+    if(audioCtx) audioCtx.close();
+    audioCtx = analyser = source = stream = null;
+    smooth = peak = 0;
+    render();
+    btn.textContent = 'マイクをオンにする';
+    btn.classList.remove('live');
+    capEl.textContent = 'いまの声の大きさ';
+    statusEl.className = 'status';
+    statusEl.textContent = 'ボタンを押して、声を出してみてください';
+  }
+
+  btn.addEventListener('click', ()=> running ? stop() : start());
+  render();
+})();
+</script>
+</body>
+</html>
