@@ -178,7 +178,7 @@
   }
 
   // --- audio state ---
-  let audioCtx, analyser, source, stream, rafId, buf, freqBuf;
+  let audioCtx, analyser, source, stream, rafId, buf;
   let smooth = 0, peak = 0, running = false;
 
   const HARD_FLOOR_DB = -70;  // どんな環境でもこれより下は無音扱い
@@ -187,10 +187,11 @@
   const NOISE_MARGIN_DB = 6;  // 暗騒音より何dB上を「無音」の境目にするか
   let FLOOR_DB = -62;   // 起動時のキャリブレーションで上書きされる
 
-  // 人の声のフォルマントが乗る帯域（低い男声の基音〜歯擦音の手前まで）
-  const VOICE_MIN_HZ = 85;
-  const VOICE_MAX_HZ = 3800;
-  const VOICE_RATIO_MIN = 0.5; // この帯域にエネルギーの何割以上が集中していれば「声」とみなすか
+  // 人の声(母音)の基本周波数として妥当な範囲。口笛はこれより高いことが多い
+  const VOICE_F0_MIN_HZ = 75;
+  const VOICE_F0_MAX_HZ = 400;
+  const VOICE_PERIODICITY_MIN = 0.35; // 自己相関のピークがこれ未満なら「周期性が無い音」として無視
+  const CORR_WIN = 1200; // 自己相関の計算に使うサンプル数(重くなりすぎないよう固定)
 
   function rmsOf(buf){
     let sum = 0;
@@ -198,17 +199,32 @@
     return Math.sqrt(sum/buf.length);
   }
 
-  function voiceRatio(freqData, sampleRate, fftSize){
-    const binHz = sampleRate / fftSize;
-    const lo = Math.max(1, Math.round(VOICE_MIN_HZ / binHz));
-    const hi = Math.min(freqData.length - 1, Math.round(VOICE_MAX_HZ / binHz));
-    let voiceEnergy = 0, totalEnergy = 0;
-    for(let i=1;i<freqData.length;i++){ // i=0(直流成分)は除外
-      const e = freqData[i] * freqData[i];
-      totalEnergy += e;
-      if(i>=lo && i<=hi) voiceEnergy += e;
+  // 時間波形の自己相関から基本周波数(ピッチ)を推定する。
+  // 声のような周期的な波形は特定のラグで強い相関を持つが、
+  // 息を吹きかけるようなランダムノイズは相関が弱い。
+  function detectPitch(buf, sampleRate){
+    const n = buf.length;
+    const minLag = Math.max(2, Math.floor(sampleRate / VOICE_F0_MAX_HZ));
+    const maxLag = Math.min(n - CORR_WIN, Math.floor(sampleRate / VOICE_F0_MIN_HZ));
+    if(maxLag <= minLag) return { periodic:false };
+
+    const len = Math.min(n, CORR_WIN + maxLag);
+    const data = new Float32Array(len);
+    for(let i=0;i<len;i++) data[i] = (buf[i]-128)/128;
+
+    let energy = 0;
+    for(let i=0;i<CORR_WIN;i++) energy += data[i]*data[i];
+    if(energy < 1e-6) return { periodic:false };
+
+    let bestLag = -1, bestCorr = 0;
+    for(let lag=minLag; lag<=maxLag; lag++){
+      let corr = 0;
+      for(let i=0;i<CORR_WIN;i++) corr += data[i]*data[i+lag];
+      corr /= energy;
+      if(corr > bestCorr){ bestCorr = corr; bestLag = lag; }
     }
-    return totalEnergy > 0 ? voiceEnergy / totalEnergy : 0;
+    if(bestLag <= 0) return { periodic:false };
+    return { periodic: bestCorr >= VOICE_PERIODICITY_MIN, f0: sampleRate/bestLag, corr: bestCorr };
   }
 
   function levelFromRMS(rms){
@@ -253,9 +269,8 @@
     const rms = rmsOf(buf);
     let target = levelFromRMS(rms);
     if(target > 0){
-      analyser.getByteFrequencyData(freqBuf);
-      const ratio = voiceRatio(freqBuf, audioCtx.sampleRate, analyser.fftSize);
-      if(ratio < VOICE_RATIO_MIN) target = 0; // 声の帯域に集中していない音は無視
+      const pitch = detectPitch(buf, audioCtx.sampleRate);
+      if(!pitch.periodic) target = 0; // 周期性が弱い音(息・環境音)や声の高さの範囲外の音は無視
     }
     // 素早く上がって、ゆっくり下がる
     const a = target > smooth ? 0.55 : 0.14;
@@ -301,10 +316,9 @@
     await audioCtx.resume(); // iOS Safari 対策
     source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 1024;
+    analyser.fftSize = 2048; // ピッチ検出に十分なサンプル数を確保
     analyser.smoothingTimeConstant = 0;
     buf = new Uint8Array(analyser.fftSize);
-    freqBuf = new Uint8Array(analyser.frequencyBinCount);
     source.connect(analyser);
 
     statusEl.textContent = '周囲の音を測定しています…（静かにしていてください）';
