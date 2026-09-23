@@ -133,10 +133,6 @@
   .btn:focus-visible{outline:2px solid var(--green);outline-offset:3px;}
   .status{text-align:center;color:var(--muted);font-size:.8rem;margin-top:12px;min-height:1.2em;}
   .status.err{color:var(--red);}
-  .debug{
-    text-align:center;color:#4A5563;font-size:.66rem;margin-top:8px;min-height:1.1em;
-    font-family:"Space Grotesk",monospace;letter-spacing:.01em;
-  }
   .version{
     text-align:center;color:#333B46;font-size:.62rem;margin-top:auto;padding-top:18px;
     letter-spacing:.04em;
@@ -163,8 +159,7 @@
 
     <button class="btn" id="btn">マイクをオンにする</button>
     <div class="status" id="status">ボタンを押して、声を出してみてください</div>
-    <div class="debug" id="debug"></div>
-    <div class="version">build v7 · 2026-09-23</div>
+    <div class="version">build v8 · 2026-09-23</div>
   </div>
 
 <script>
@@ -174,7 +169,6 @@
   const capEl = document.getElementById('caption');
   const btn = document.getElementById('btn');
   const statusEl = document.getElementById('status');
-  const debugEl = document.getElementById('debug');
 
   // build 10 segments (level 1..10)
   const rows = [];
@@ -192,41 +186,14 @@
   let audioCtx, analyser, source, stream, rafId, buf;
   let smooth = 0, peak = 0, running = false;
 
-  const HARD_FLOOR_DB = -70;  // どんな環境でもこれより下は無音扱い
+  const FLOOR_DB = -62;   // ほぼ無音の目安
   const CEIL_DB  = -12;   // 振り切りの目安
-  const CALIBRATE_MS = 700;   // 起動時に周囲の音を測る時間
-  const NOISE_MARGIN_DB = 6;  // 暗騒音より何dB上を「無音」の境目にするか
-  let FLOOR_DB = -62;   // 起動時のキャリブレーションで上書きされる
-
-  function rmsOf(buf){
-    let sum = 0;
-    for(let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum += v*v; }
-    return Math.sqrt(sum/buf.length);
-  }
 
   function levelFromRMS(rms){
     if(rms <= 1e-7) return 0;
     const db = 20 * Math.log10(rms);
     let t = (db - FLOOR_DB) / (CEIL_DB - FLOOR_DB);
     return Math.max(0, Math.min(1, t)) * 10;
-  }
-
-  function waitFrame(){
-    return new Promise(r => requestAnimationFrame(r));
-  }
-
-  async function calibrateNoiseFloor(){
-    const dbSamples = [];
-    const t0 = performance.now();
-    while(performance.now() - t0 < CALIBRATE_MS){
-      analyser.getByteTimeDomainData(buf);
-      const rms = rmsOf(buf);
-      if(rms > 1e-7) dbSamples.push(20 * Math.log10(rms));
-      await waitFrame();
-    }
-    if(dbSamples.length === 0) return HARD_FLOOR_DB;
-    const avgDb = dbSamples.reduce((a,b)=>a+b, 0) / dbSamples.length;
-    return Math.min(Math.max(avgDb + NOISE_MARGIN_DB, HARD_FLOOR_DB), CEIL_DB - 10);
   }
 
   function render(){
@@ -241,16 +208,12 @@
     numEl.classList.toggle('silent', lit === 0);
   }
 
-  function updateDebug(rms){
-    const db = rms > 1e-7 ? (20 * Math.log10(rms)).toFixed(1) : '-∞';
-    debugEl.textContent = `音量 ${db}dB (しきい値 ${FLOOR_DB.toFixed(1)}dB)`;
-  }
-
   function loop(){
     analyser.getByteTimeDomainData(buf);
-    const rms = rmsOf(buf);
+    let sum = 0;
+    for(let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum += v*v; }
+    const rms = Math.sqrt(sum/buf.length);
     const target = levelFromRMS(rms);
-    updateDebug(rms);
     // 素早く上がって、ゆっくり下がる
     const a = target > smooth ? 0.55 : 0.14;
     smooth += (target - smooth) * a;
@@ -300,9 +263,6 @@
     buf = new Uint8Array(analyser.fftSize);
     source.connect(analyser);
 
-    statusEl.textContent = '周囲の音を測定しています…（静かにしていてください）';
-    FLOOR_DB = await calibrateNoiseFloor();
-
     running = true;
     btn.textContent = 'ストップ';
     btn.classList.add('live');
@@ -324,7 +284,6 @@
     capEl.textContent = 'いまの声の大きさ';
     statusEl.className = 'status';
     statusEl.textContent = 'ボタンを押して、声を出してみてください';
-    debugEl.textContent = '';
   }
 
   btn.addEventListener('click', ()=> running ? stop() : start());
