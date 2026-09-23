@@ -164,7 +164,7 @@
     <button class="btn" id="btn">マイクをオンにする</button>
     <div class="status" id="status">ボタンを押して、声を出してみてください</div>
     <div class="debug" id="debug"></div>
-    <div class="version">build v6 · 2026-09-23</div>
+    <div class="version">build v7 · 2026-09-23</div>
   </div>
 
 <script>
@@ -198,44 +198,10 @@
   const NOISE_MARGIN_DB = 6;  // 暗騒音より何dB上を「無音」の境目にするか
   let FLOOR_DB = -62;   // 起動時のキャリブレーションで上書きされる
 
-  // 人の声(母音)の基本周波数として妥当な範囲。口笛はこれより高いことが多い
-  const VOICE_F0_MIN_HZ = 75;
-  const VOICE_F0_MAX_HZ = 400;
-  const VOICE_PERIODICITY_MIN = 0.22; // 自己相関のピークがこれ未満なら「周期性が無い音」として無視
-  const CORR_WIN = 1200; // 自己相関の計算に使うサンプル数(重くなりすぎないよう固定)
-
   function rmsOf(buf){
     let sum = 0;
     for(let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum += v*v; }
     return Math.sqrt(sum/buf.length);
-  }
-
-  // 時間波形の自己相関から基本周波数(ピッチ)を推定する。
-  // 声のような周期的な波形は特定のラグで強い相関を持つが、
-  // 息を吹きかけるようなランダムノイズは相関が弱い。
-  function detectPitch(buf, sampleRate){
-    const n = buf.length;
-    const minLag = Math.max(2, Math.floor(sampleRate / VOICE_F0_MAX_HZ));
-    const maxLag = Math.min(n - CORR_WIN, Math.floor(sampleRate / VOICE_F0_MIN_HZ));
-    if(maxLag <= minLag) return { periodic:false };
-
-    const len = Math.min(n, CORR_WIN + maxLag);
-    const data = new Float32Array(len);
-    for(let i=0;i<len;i++) data[i] = (buf[i]-128)/128;
-
-    let energy = 0;
-    for(let i=0;i<CORR_WIN;i++) energy += data[i]*data[i];
-    if(energy < 1e-6) return { periodic:false };
-
-    let bestLag = -1, bestCorr = 0;
-    for(let lag=minLag; lag<=maxLag; lag++){
-      let corr = 0;
-      for(let i=0;i<CORR_WIN;i++) corr += data[i]*data[i+lag];
-      corr /= energy;
-      if(corr > bestCorr){ bestCorr = corr; bestLag = lag; }
-    }
-    if(bestLag <= 0) return { periodic:false };
-    return { periodic: bestCorr >= VOICE_PERIODICITY_MIN, f0: sampleRate/bestLag, corr: bestCorr };
   }
 
   function levelFromRMS(rms){
@@ -275,26 +241,16 @@
     numEl.classList.toggle('silent', lit === 0);
   }
 
-  function updateDebug(rms, pitch){
+  function updateDebug(rms){
     const db = rms > 1e-7 ? (20 * Math.log10(rms)).toFixed(1) : '-∞';
-    let line = `音量 ${db}dB (しきい値 ${FLOOR_DB.toFixed(1)}dB)`;
-    if(pitch){
-      const f0 = pitch.f0 ? Math.round(pitch.f0) : '-';
-      line += ` / 高さ ${f0}Hz / 周期性 ${pitch.corr.toFixed(2)} / ${pitch.periodic ? '声と判定' : 'ノイズ扱い'}`;
-    }
-    debugEl.textContent = line;
+    debugEl.textContent = `音量 ${db}dB (しきい値 ${FLOOR_DB.toFixed(1)}dB)`;
   }
 
   function loop(){
     analyser.getByteTimeDomainData(buf);
     const rms = rmsOf(buf);
-    let target = levelFromRMS(rms);
-    let pitch = null;
-    if(target > 0){
-      pitch = detectPitch(buf, audioCtx.sampleRate);
-      if(!pitch.periodic) target = 0; // 周期性が弱い音(息・環境音)や声の高さの範囲外の音は無視
-    }
-    updateDebug(rms, pitch);
+    const target = levelFromRMS(rms);
+    updateDebug(rms);
     // 素早く上がって、ゆっくり下がる
     const a = target > smooth ? 0.55 : 0.14;
     smooth += (target - smooth) * a;
@@ -339,7 +295,7 @@
     await audioCtx.resume(); // iOS Safari 対策
     source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048; // ピッチ検出に十分なサンプル数を確保
+    analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0;
     buf = new Uint8Array(analyser.fftSize);
     source.connect(analyser);
