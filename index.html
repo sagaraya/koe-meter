@@ -178,17 +178,62 @@
   }
 
   // --- audio state ---
-  let audioCtx, analyser, source, stream, rafId, buf;
+  let audioCtx, analyser, source, stream, rafId, buf, freqBuf;
   let smooth = 0, peak = 0, running = false;
 
-  const FLOOR_DB = -62;   // ほぼ無音の目安
+  const HARD_FLOOR_DB = -70;  // どんな環境でもこれより下は無音扱い
   const CEIL_DB  = -12;   // 振り切りの目安
+  const CALIBRATE_MS = 700;   // 起動時に周囲の音を測る時間
+  const NOISE_MARGIN_DB = 6;  // 暗騒音より何dB上を「無音」の境目にするか
+  let FLOOR_DB = -62;   // 起動時のキャリブレーションで上書きされる
+
+  // 人の声のフォルマントが乗る帯域（低い男声の基音〜歯擦音の手前まで）
+  const VOICE_MIN_HZ = 85;
+  const VOICE_MAX_HZ = 3800;
+  const VOICE_RATIO_MIN = 0.5; // この帯域にエネルギーの何割以上が集中していれば「声」とみなすか
+
+  function rmsOf(buf){
+    let sum = 0;
+    for(let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum += v*v; }
+    return Math.sqrt(sum/buf.length);
+  }
+
+  function voiceRatio(freqData, sampleRate, fftSize){
+    const binHz = sampleRate / fftSize;
+    const lo = Math.max(1, Math.round(VOICE_MIN_HZ / binHz));
+    const hi = Math.min(freqData.length - 1, Math.round(VOICE_MAX_HZ / binHz));
+    let voiceEnergy = 0, totalEnergy = 0;
+    for(let i=1;i<freqData.length;i++){ // i=0(直流成分)は除外
+      const e = freqData[i] * freqData[i];
+      totalEnergy += e;
+      if(i>=lo && i<=hi) voiceEnergy += e;
+    }
+    return totalEnergy > 0 ? voiceEnergy / totalEnergy : 0;
+  }
 
   function levelFromRMS(rms){
     if(rms <= 1e-7) return 0;
     const db = 20 * Math.log10(rms);
     let t = (db - FLOOR_DB) / (CEIL_DB - FLOOR_DB);
     return Math.max(0, Math.min(1, t)) * 10;
+  }
+
+  function waitFrame(){
+    return new Promise(r => requestAnimationFrame(r));
+  }
+
+  async function calibrateNoiseFloor(){
+    const dbSamples = [];
+    const t0 = performance.now();
+    while(performance.now() - t0 < CALIBRATE_MS){
+      analyser.getByteTimeDomainData(buf);
+      const rms = rmsOf(buf);
+      if(rms > 1e-7) dbSamples.push(20 * Math.log10(rms));
+      await waitFrame();
+    }
+    if(dbSamples.length === 0) return HARD_FLOOR_DB;
+    const avgDb = dbSamples.reduce((a,b)=>a+b, 0) / dbSamples.length;
+    return Math.min(Math.max(avgDb + NOISE_MARGIN_DB, HARD_FLOOR_DB), CEIL_DB - 10);
   }
 
   function render(){
@@ -205,10 +250,13 @@
 
   function loop(){
     analyser.getByteTimeDomainData(buf);
-    let sum = 0;
-    for(let i=0;i<buf.length;i++){ const v=(buf[i]-128)/128; sum += v*v; }
-    const rms = Math.sqrt(sum/buf.length);
-    const target = levelFromRMS(rms);
+    const rms = rmsOf(buf);
+    let target = levelFromRMS(rms);
+    if(target > 0){
+      analyser.getByteFrequencyData(freqBuf);
+      const ratio = voiceRatio(freqBuf, audioCtx.sampleRate, analyser.fftSize);
+      if(ratio < VOICE_RATIO_MIN) target = 0; // 声の帯域に集中していない音は無視
+    }
     // 素早く上がって、ゆっくり下がる
     const a = target > smooth ? 0.55 : 0.14;
     smooth += (target - smooth) * a;
@@ -256,7 +304,11 @@
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0;
     buf = new Uint8Array(analyser.fftSize);
+    freqBuf = new Uint8Array(analyser.frequencyBinCount);
     source.connect(analyser);
+
+    statusEl.textContent = '周囲の音を測定しています…（静かにしていてください）';
+    FLOOR_DB = await calibrateNoiseFloor();
 
     running = true;
     btn.textContent = 'ストップ';
